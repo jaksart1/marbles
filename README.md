@@ -111,6 +111,7 @@ You will need to do this step even if you plan on hosting marbles in Bluemix.
 
 	```
 	git clone https://github.com/IBM-Blockchain/marbles.git --depth 1
+	cd marbles
 	git checkout v4.0
 	```
 
@@ -239,28 +240,14 @@ First action is to enroll the admin.  Look at the following code snippet on enro
 ```js
 //enroll admin
 enrollment.enroll = function (options, cb) {
-    var chain = {};
-    var client = null;
-    try {
 // [Step 1]
-        client = new HFC();
-        chain = client.newChain(options.channel_id);
-    }
-    catch (e) {
-        //it might error about 1 chain per network, but that's not a problem just continue
-    }
-
-    if (!options.uuid) {
-        logger.error('cannot enroll with undefined uuid');
-        if (cb) cb({ error: 'cannot enroll with undefined uuid' });
-        return;
-    }
-
+    var client = new FabricClient();
+    var channel = client.newChannel(options.channel_id);
     logger.info('[fcw] Going to enroll for mspId ', options);
 
 // [Step 2]
     // Make eCert kvs (Key Value Store)
-    HFC.newDefaultKeyValueStore({
+    FabricClient.newDefaultKeyValueStore({
         path: path.join(os.homedir(), '.hfc-key-store/' + options.uuid) //store eCert in the kvs directory
     }).then(function (store) {
         client.setStateStore(store);
@@ -270,39 +257,22 @@ enrollment.enroll = function (options, cb) {
     }).then(function (submitter) {
 
 // [Step 4]
-        chain.addOrderer(new Orderer(options.orderer_url, {
+        channel.addOrderer(new Orderer(options.orderer_url, {
           pem: options.orderer_tls_opts.pem,
           'ssl-target-name-override': options.orderer_tls_opts.common_name  //can be null if cert matches hostname
         }));
 
 // [Step 5]
-        try {
-            for (var i in options.peer_urls) {
-                chain.addPeer(new Peer(options.peer_urls[i], {
-                    pem: options.peer_tls_opts.pem,
-                    'ssl-target-name-override': options.peer_tls_opts.common_name
-                }));
-                logger.debug('added peer', options.peer_urls[i]);
-            }
-        }
-        catch (e) {
-            //might error if peer already exists, but we don't care
-        }
-        try {
-            chain.setPrimaryPeer(new Peer(options.peer_urls[0], {
-                 pem: options.peer_tls_opts.pem,
-                 'ssl-target-name-override': options.peer_tls_opts.common_name
-            }));
-            logger.debug('added primary peer', options.peer_urls[0]);
-        }
-        catch (e) {
-            //might error b/c bugs, don't care
-        }
-
+        channel.addPeer(new Peer(options.peer_urls[0], {
+            pem: options.peer_tls_opts.pem,
+            'ssl-target-name-override': options.peer_tls_opts.common_name
+        }));
+        logger.debug('added peer', options.peer_urls[0]);
+        
 // [Step 6]
         // --- Success --- //
         logger.debug('[fcw] Successfully got enrollment ' + options.uuid);
-        if (cb) cb(null, { chain: chain, submitter: submitter });
+        if (cb) cb(null, { channel: channel, submitter: submitter });
         return;
 
     }).catch(
@@ -512,7 +482,7 @@ __/utils/marbles_cc_lib.js__
 The the `set_marble_owner()` function is listed above. 
 The important parts are that it is setting the proposal's invocation function name to "set_owner" with the line `fcn: 'set_owner'`. 
 Note that the peer and orderer URLs have already been set when we enrolled the admin. 
-By default the SDK will send this transaction to all peers that have been added with `chain.addPeer`. 
+By default the SDK will send this transaction to all peers that have been added with `channel.addPeer`. 
 In our case the SDK will send to only 1 peer, since we have only added the 1 peer. 
 Remember this peer was added in the `enrollment` section. 
 
@@ -580,10 +550,24 @@ The admin moved the marble, JS detected the drag/drop, client sends a websocket 
 
 That’s it! Hope you had fun transferring marbles. 
 
-## Marbles Tips
-There are few comments about marbles that don't fit neatly into the instructions above. 
-Here is an assortment of marbles tips and instructions. 
-- coming soon
+# Marbles FAQs
+Do you have questions about _why_ something in marbles is the way it is?  Or _how_ to do something? Check out the [FAQ](./docs/faq.md) .
+
+# Feedback
+I'm very interested in your feedback. 
+This is a demo built for people like you, and it will continue to be shaped for people like you. 
+On a scale of no-anesthetic-root-canal to basket of puppies, how was it? 
+If you have any ideas on how to improve the demo/tutorial, please reach out! 
+Specifically:
+
+- Did the format of the readme work well for you?
+- At which points did you get lost?
+- Is something broken!?
+- Did your knowledge grow by the end of the tutorial?
+- Was something particularly painful?
+- Did it make you have an existential crisis and you are suddenly unsure of what it means to be, you?
+
+Use the [GitHub Issues](https://github.com/IBM-Blockchain/marbles/issues) section to communicate any improvements/bugs and pain points!
 
 # License
 [Apache 2.0](LICENSE)

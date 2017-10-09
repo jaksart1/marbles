@@ -1,3 +1,7 @@
+// ============================================================================================================================
+// 													Helper.js
+// This file is to help safely parse the config JSON files found in the "../config/" folder
+// ============================================================================================================================
 var fs = require('fs');
 var path = require('path');
 var os = require('os');
@@ -10,14 +14,14 @@ module.exports = function (config_filename, logger) {
 		config_filename = 'marbles_tls.json';
 	}
 
-	var config_path = path.join(__dirname, '../config/' + config_filename);
-	helper.config = require(config_path);
-	var creds_path = path.join(__dirname, '../config/' + helper.config.cred_filename);
-	helper.creds = require(creds_path);
-	var package_json = require(path.join(__dirname, '../package.json'));
+	helper.config_path = path.join(__dirname, '../config/' + config_filename);
+	helper.config = require(helper.config_path);											//load the config file
+	helper.creds_path = path.join(__dirname, '../config/' + helper.config.cred_filename);
+	helper.creds = require(helper.creds_path);												//load the credential file
+	var package_json = require(path.join(__dirname, '../package.json'));					//get release version of marbles from package.json
 
-	logger.info('Loaded config file', config_path);
-	logger.info('Loaded creds file', creds_path);
+	logger.info('Loaded config file', helper.config_path);									//path to config file
+	logger.info('Loaded creds file', helper.creds_path);									//path to the blockchain credentials file
 
 	// get network id
 	helper.getNetworkName = function () {
@@ -74,6 +78,17 @@ module.exports = function (config_filename, logger) {
 				throw new Error('Peer key not found.');
 			}
 		}
+	};
+
+	// get all peers grpc url on this channel
+	helper.getAllPeerUrls = function (channelId) {
+		let ret = [];
+		if (helper.creds.channels && helper.creds.channels[channelId]) {
+			for (let peerId in helper.creds.channels[channelId].peers) {	//iter on the peers on this channel
+				ret.push(helper.creds.peers[peerId].url);					//get the grpc url for this peer
+			}
+		}
+		return ret;
 	};
 
 	// get a peer's grpc event url
@@ -142,6 +157,15 @@ module.exports = function (config_filename, logger) {
 				throw new Error('CA not found.');
 			}
 		}
+	};
+
+	// get all the ca http urls
+	helper.getAllCaUrls = function () {
+		let ret = [];
+		for (let id in helper.creds.certificateAuthorities) {
+			ret.push(helper.creds.certificateAuthorities[id].url);
+		}
+		return ret;
 	};
 
 	// get a ca's name, could be null
@@ -266,6 +290,14 @@ module.exports = function (config_filename, logger) {
 		throw new Error('Orgs not found.');
 	};
 
+	// find the org name in the client field
+	helper.getClientOrg = function () {
+		if (helper.creds.client && helper.creds.client.organization) {
+			return helper.creds.client.organization;
+		}
+		throw new Error('Org not found.');
+	};
+
 	// get this org's msp id
 	helper.getOrgsMSPid = function (key) {
 		if (key === undefined || key == null) {
@@ -335,15 +367,23 @@ module.exports = function (config_filename, logger) {
 	// get the chaincode id on network
 	helper.getChaincodeId = function () {
 		var channel = helper.getChannelId();
-		var chaincode = Object.keys(helper.creds.channels[channel].chaincodes);
-		return chaincode[0];
+		if (channel && helper.creds.channels[channel] && helper.creds.channels[channel].chaincodes) {
+			var chaincode = Object.keys(helper.creds.channels[channel].chaincodes);
+			return chaincode[0];
+		}
+		logger.warn('No chaincode ID found in credentials file... might be okay if we haven\'t instantiated marbles yet');
+		return null;
 	};
 
 	// get the chaincode version on network
 	helper.getChaincodeVersion = function () {
 		var channel = helper.getChannelId();
-		var chaincode = Object.keys(helper.creds.channels[channel].chaincodes);
-		return helper.creds.channels[channel].chaincodes[chaincode];
+		var chaincodeId = helper.getChaincodeId();
+		if (channel && chaincodeId) {
+			return helper.creds.channels[channel].chaincodes[chaincodeId];
+		}
+		logger.warn('No chaincode version found in credentials file... might be okay if we haven\'t instantiated marbles yet');
+		return null;
 	};
 
 	// get the chaincode id on network
@@ -381,8 +421,8 @@ module.exports = function (config_filename, logger) {
 		function copy_keys_over(custom_path) {
 			try {
 				const default_path2 = path.join(os.homedir(), '.hfc-key-store/');
-				const private_key = '5890f0061619c06fb29dea8cb304edecc020fe63f41a6db109f1e227cc1cb2a8-priv';	//todo make this generic
-				const public_key = '5890f0061619c06fb29dea8cb304edecc020fe63f41a6db109f1e227cc1cb2a8-pub';
+				const private_key = 'cd96d5260ad4757551ed4a5a991e62130f8008a0bf996e4e4b84cd097a747fec-priv';	//todo make this generic
+				const public_key = 'cd96d5260ad4757551ed4a5a991e62130f8008a0bf996e4e4b84cd097a747fec-pub';
 				fs.createReadStream(custom_path + private_key).pipe(fs.createWriteStream(default_path2 + private_key));
 				fs.createReadStream(custom_path + public_key).pipe(fs.createWriteStream(default_path2 + public_key));
 			} catch (e) { }
@@ -430,12 +470,12 @@ module.exports = function (config_filename, logger) {
 				return helper.config[marbles_field];
 			}
 			else {
-				logger.warn('"' + marbles_field + '" not found in config json: ' + config_path);
+				logger.warn('"' + marbles_field + '" not found in config json: ' + helper.config_path);
 				return null;
 			}
 		}
 		catch (e) {
-			logger.warn('"' + marbles_field + '" not found in config json: ' + config_path);
+			logger.warn('"' + marbles_field + '" not found in config json: ' + helper.config_path);
 			return null;
 		}
 	}
@@ -453,8 +493,8 @@ module.exports = function (config_filename, logger) {
 	// build the marbles lib module options
 	helper.makeMarblesLibOptions = function () {
 		const channel = helper.getChannelId();
-		const first_org = helper.getFirstOrg();
-		const first_ca = helper.getFirstCaName(first_org);
+		const org_2_use = helper.getClientOrg();
+		const first_ca = helper.getFirstCaName(org_2_use);
 		const first_peer = helper.getFirstPeerName(channel);
 		const first_orderer = helper.getFirstOrdererName(channel);
 		return {
@@ -466,6 +506,7 @@ module.exports = function (config_filename, logger) {
 			ca_tls_opts: helper.getCaTlsCertOpts(first_ca),
 			orderer_tls_opts: helper.getOrdererTlsCertOpts(first_orderer),
 			peer_tls_opts: helper.getPeerTlsCertOpts(first_peer),
+			peer_urls: helper.getAllPeerUrls(channel),
 		};
 	};
 
@@ -475,16 +516,16 @@ module.exports = function (config_filename, logger) {
 			throw new Error('User index not passed');
 		} else {
 			const channel = helper.getChannelId();
-			const first_org = helper.getFirstOrg();
-			const first_ca = helper.getFirstCaName(first_org);
+			const org_2_use = helper.getClientOrg();
+			const first_ca = helper.getFirstCaName(org_2_use);
 			const first_peer = helper.getFirstPeerName(channel);
 			const first_orderer = helper.getFirstOrdererName(channel);
-			const org_name = helper.getOrgsMSPid(first_org);				//lets use the first org we find
+			const org_name = helper.getOrgsMSPid(org_2_use);				//lets use the first org we find
 			const user_obj = helper.getEnrollObj(first_ca, userIndex);		//there may be multiple users
 			return {
 				channel_id: channel,
 				uuid: helper.makeUniqueId(),
-				ca_url: helper.getCasUrl(first_ca),
+				ca_urls: helper.getAllCaUrls(),
 				ca_name: helper.getCaName(first_ca),
 				orderer_url: helper.getOrderersUrl(first_orderer),
 				peer_urls: [helper.getPeersUrl(first_peer)],
@@ -502,10 +543,10 @@ module.exports = function (config_filename, logger) {
 	// build the enrollment options using an admin cert
 	helper.makeEnrollmentOptionsUsingCert = function () {
 		const channel = helper.getChannelId();
-		const first_org = helper.getFirstOrg();
+		const org_2_use = helper.getClientOrg();
 		const first_peer = helper.getFirstPeerName(channel);
 		const first_orderer = helper.getFirstOrdererName(channel);
-		const org_name = helper.getOrgsMSPid(first_org);		//lets use the first org we find
+		const org_name = helper.getOrgsMSPid(org_2_use);		//lets use the first org we find
 		return {
 			channel_id: channel,
 			uuid: helper.makeUniqueId(),
@@ -525,13 +566,13 @@ module.exports = function (config_filename, logger) {
 		console.log('saving the creds file has been disabled temporarily');
 
 		const channel = helper.getChannelId();
-		const first_org = helper.getFirstOrg();
+		const org_2_use = helper.getClientOrg();
 		const first_peer = helper.getFirstPeerName(channel);
-		const first_ca = helper.getFirstCaName(first_org);
+		const first_ca = helper.getFirstCaName(org_2_use);
 		const first_orderer = helper.getFirstOrdererName(channel);
 
-		//var config_file = JSON.parse(fs.readFileSync(config_path, 'utf8'));
-		var creds_file = JSON.parse(fs.readFileSync(creds_path, 'utf8'));
+		//var config_file = JSON.parse(fs.readFileSync(helper.config_path, 'utf8'));
+		var creds_file = JSON.parse(fs.readFileSync(helper.creds_path, 'utf8'));
 
 		if (obj.ordererUrl) {
 			creds_file.orderers[first_orderer].url = obj.ordererUrl;
@@ -562,10 +603,8 @@ module.exports = function (config_filename, logger) {
 			};
 		}
 
-		fs.writeFileSync(creds_path, JSON.stringify(creds_file, null, 4), 'utf8');	//save to file
+		fs.writeFileSync(helper.creds_path, JSON.stringify(creds_file, null, 4), 'utf8');	//save to file
 		helper.creds = creds_file;													//replace old copy
-		//fs.writeFileSync(config_path, JSON.stringify(config_file, null, 4), 'utf8');//save to file
-		//helper.config = config_file;												//replace old copy
 	};
 
 
@@ -628,8 +667,8 @@ module.exports = function (config_filename, logger) {
 		if (!channel) {
 			errors.push('There is no channel data in the "channels" field');
 		} else {
-			const first_org = helper.getFirstOrg();
-			const first_ca = helper.getFirstCaName(first_org);
+			const org_2_use = helper.getClientOrg();
+			const first_ca = helper.getFirstCaName(org_2_use);
 			const first_orderer = helper.getFirstOrdererName(channel);
 			const first_peer = helper.getFirstPeerName(channel);
 
@@ -669,8 +708,8 @@ module.exports = function (config_filename, logger) {
 	helper.check_protocols = function () {
 		let errors = [];
 		const channel = helper.getChannelId();
-		const first_org = helper.getFirstOrg();
-		const first_ca = helper.getFirstCaName(first_org);
+		const org_2_use = helper.getClientOrg();
+		const first_ca = helper.getFirstCaName(org_2_use);
 		const first_orderer = helper.getFirstOrdererName(channel);
 		const first_peer = helper.getFirstPeerName(channel);
 

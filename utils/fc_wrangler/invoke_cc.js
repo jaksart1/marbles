@@ -22,8 +22,8 @@ module.exports = function (g_options, logger) {
 					cc_function: "function_name",
 					cc_args: ["argument 1"],
 					peer_tls_opts: {
-						pem: 'complete tls certificate',					<optional>
-						common_name: 'common name used in pem certificate' 	<optional>
+						pem: 'complete tls certificate',					<required if using ssl>
+						common_name: 'common name used in pem certificate' 	<required if using ssl>
 					}
 		}
 	*/
@@ -46,7 +46,6 @@ module.exports = function (g_options, logger) {
 
 		// Setup EventHub
 		if (options.event_url) {
-			console.log('------------------ test');
 			logger.debug('[fcw] listening to event url', options.event_url);
 			eventHub = client.newEventHub();
 			eventHub.setPeerAddr(options.event_url, {
@@ -80,6 +79,7 @@ module.exports = function (g_options, logger) {
 						// Watchdog for no block event
 						var watchdog = setTimeout(() => {
 							logger.error('[fcw] Failed to receive block event within the timeout period');
+							eventHub.disconnect();
 
 							if (cb && !cbCalled) {
 								cbCalled = true;
@@ -93,6 +93,7 @@ module.exports = function (g_options, logger) {
 							var elapsed = Date.now() - startTime + 'ms';
 							logger.info('[fcw] The chaincode transaction event has happened! success?:', code, elapsed);
 							clearTimeout(watchdog);
+							eventHub.disconnect();
 
 							if (code !== 'VALID') {
 								if (cb && !cbCalled) {
@@ -110,6 +111,9 @@ module.exports = function (g_options, logger) {
 						});
 					} catch (e) {
 						logger.error('[fcw] Illusive event error: ', e);//not sure why this happens, seems rare 3/27/2017
+						try {
+							eventHub.disconnect();
+						} catch (e) { }
 						if (cb && !cbCalled) {
 							cbCalled = true;
 							return cb(e);								//all terrible, pass it back
@@ -134,6 +138,9 @@ module.exports = function (g_options, logger) {
 			}
 		}).catch(function (err) {
 			logger.error('[fcw] Error in invoke catch block', typeof err, err);
+			if (options.event_url) {
+				eventHub.disconnect();
+			}
 
 			var formatted = common.format_error_msg(err);
 			if (options.ordered_hook) options.ordered_hook('failed', formatted);

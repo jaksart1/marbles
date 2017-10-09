@@ -11,7 +11,6 @@ module.exports = function (logger) {
 	var CaService = require('fabric-ca-client/lib/FabricCAClientImpl.js');
 	var Orderer = require('fabric-client/lib/Orderer.js');
 	var Peer = require('fabric-client/lib/Peer.js');
-	var os = require('os');
 	FabricClient.setConfigSetting('request-timeout', 90000);
 
 	//-----------------------------------------------------------------
@@ -29,16 +28,16 @@ module.exports = function (logger) {
 			enroll_secret: 'enrollSecret',
 			msp_id: 'string',
 			ca_tls_opts: {
-				pem: 'complete tls certificate',					<optional>
-				common_name: 'common name used in pem certificate' 	<optional>
+				pem: 'complete tls certificate',					<required if using ssl>
+				common_name: 'common name used in pem certificate' 	<required if using ssl>
 			},
 			orderer_tls_opts: {
-				pem: 'complete tls certificate',					<optional>
-				common_name: 'common name used in pem certificate' 	<optional>
+				pem: 'complete tls certificate',					<required if using ssl>
+				common_name: 'common name used in pem certificate' 	<required if using ssl>
 			},
 			peer_tls_opts: {
-				pem: 'complete tls certificate',					<optional>
-				common_name: 'common name used in pem certificate' 	<optional>
+				pem: 'complete tls certificate',					<required if using ssl>
+				common_name: 'common name used in pem certificate' 	<required if using ssl>
 			},
 			kvs_path: '/path/to/the/key/value/store'
 		}
@@ -74,18 +73,11 @@ module.exports = function (logger) {
 				'ssl-target-name-override': options.orderer_tls_opts.common_name		//can be null if cert matches hostname
 			}));
 
-			try {
-				for (var i in options.peer_urls) {
-					channel.addPeer(new Peer(options.peer_urls[i], {
-						pem: options.peer_tls_opts.pem,
-						'ssl-target-name-override': options.peer_tls_opts.common_name	//can be null if cert matches hostname
-					}));
-					logger.debug('added peer', options.peer_urls[i]);
-				}
-			}
-			catch (e) {
-				//might error if peer already exists, but we don't care
-			}
+			channel.addPeer(new Peer(options.peer_urls[0], {
+				pem: options.peer_tls_opts.pem,
+				'ssl-target-name-override': options.peer_tls_opts.common_name			//can be null if cert matches hostname
+			}));
+			logger.debug('added peer', options.peer_urls[0]);
 
 			// --- Success --- //
 			logger.debug('[fcw] Successfully got enrollment ' + options.uuid);
@@ -108,16 +100,23 @@ module.exports = function (logger) {
 		var member;
 		return client.getUserContext(options.enroll_id, true).then((user) => {
 			if (user && user.isEnrolled()) {
-				logger.info('[fcw] Successfully loaded enrollment from persistence');			//load from KVS if we can
-				return user;
+				if (user._mspId !== options.msp_id) {										//if they don't match, this isn't our user! can't use it
+					logger.warn('[fcw] The msp id in KVS does not match the msp id passed to enroll. Need to clear the KVS.', user._mspId, options.msp_id);
+					common.rmdir(options.kvs_path);											//delete it
+					logger.error('[fcw] MSP in KVS mismatch. KVS has been deleted. Restart the app to try again.');
+					process.exit();															//this is terrible, but can't seem to reset client._userContext
+				} else {
+					logger.info('[fcw] Successfully loaded enrollment from persistence');	//load from KVS if we can
+					return user;
+				}
 			} else {
 
 				// Need to enroll it with the CA
 				var tlsOptions = {
-					trustedRoots: [options.ca_tls_opts.pem],									//pem cert required
+					trustedRoots: [options.ca_tls_opts.pem],								//pem cert required
 					verify: false
 				};
-				var ca_client = new CaService(options.ca_url, tlsOptions, options.ca_name);		//ca_name is important for the bluemix service
+				var ca_client = new CaService(options.ca_url, tlsOptions, options.ca_name);	//ca_name is important for the bluemix service
 				member = new User(options.enroll_id);
 
 				logger.debug('enroll id: "' + options.enroll_id + '", secret: "' + options.enroll_secret + '"');
@@ -164,13 +163,14 @@ module.exports = function (logger) {
 			signedCertPEM: '<cert here>',
 			msp_id: 'string',
 			orderer_tls_opts: {
-				pem: 'complete tls certificate',					<optional>
-				common_name: 'common name used in pem certificate' 	<optional>
+				pem: 'complete tls certificate',					<required if using ssl>
+				common_name: 'common name used in pem certificate' 	<required if using ssl>
 			},
 			peer_tls_opts: {
-				pem: 'complete tls certificate',					<optional>
-				common_name: 'common name used in pem certificate' 	<optional>
-			}
+				pem: 'complete tls certificate',					<required if using ssl>
+				common_name: 'common name used in pem certificate' 	<required if using ssl>
+			},
+			kvs_path: '/path/to/the/key/value/store'
 		}
 	*/
 
@@ -189,29 +189,22 @@ module.exports = function (logger) {
 
 		// Make eCert kvs (Key Value Store)
 		FabricClient.newDefaultKeyValueStore({
-			path: path.join(os.homedir(), '.hfc-key-store/' + options.uuid) 			//store eCert in the kvs directory
+			path: options.kvs_path 													//get eCert in the kvs directory
 		}).then(function (store) {
 			client.setStateStore(store);
-			return getSubmitterWithAdminCert(client, options);							//admin cert is different
+			return getSubmitterWithAdminCert(client, options);						//admin cert is different
 		}).then(function (submitter) {
 
 			channel.addOrderer(new Orderer(options.orderer_url, {
 				pem: options.orderer_tls_opts.pem,
-				'ssl-target-name-override': options.orderer_tls_opts.common_name		//can be null if cert matches hostname
+				'ssl-target-name-override': options.orderer_tls_opts.common_name	//can be null if cert matches hostname
 			}));
 
-			try {
-				for (var i in options.peer_urls) {
-					channel.addPeer(new Peer(options.peer_urls[i], {
-						pem: options.peer_tls_opts.pem,
-						'ssl-target-name-override': options.peer_tls_opts.common_name	//can be null if cert matches hostname
-					}));
-					logger.debug('added peer', options.peer_urls[i]);
-				}
-			}
-			catch (e) {
-				//might error if peer already exists, but we don't care
-			}
+			channel.addPeer(new Peer(options.peer_urls[0], {						//add the first peer
+				pem: options.peer_tls_opts.pem,
+				'ssl-target-name-override': options.peer_tls_opts.common_name		//can be null if cert matches hostname
+			}));
+			logger.debug('added peer', options.peer_urls[0]);
 
 			// --- Success --- //
 			logger.debug('[fcw] Successfully got enrollment ' + options.uuid);
